@@ -24,6 +24,7 @@ wheels/
 venv/
 ENV/
 env/
+venv_spleeter/
 
 # IDE
 .idea/
@@ -53,4 +54,10 @@ uploads/
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db 
+Thumbs.db
+
+# Installers
+Miniconda*.sh
+*.exe
+*.msi
+*.run 
