@@ -1,7 +1,7 @@
 import librosa
 import numpy as np
-import essentia.standard as es
 from scipy.stats import pearsonr
+from scipy import signal
 import tensorflow as tf
 from pathlib import Path
 import json
@@ -17,87 +17,202 @@ class VocalAnalyzer:
         except Exception as e:
             print(f"Model not found at {model_path}. Running without ML enhancement.")
             print("For better performance, obtain a pre-trained model and place it in the 'models' folder.")
-        self.pitch_processor = es.PredominantPitchMelodia()
         self.features_cache = {}
 
     def analyze_file(self, file_path):
         """Analyze a single audio file and extract vocal features."""
         try:
-            y, sr = librosa.load(file_path, sr=44100)
+            # Load audio as stereo for better vocal separation
+            y, sr = librosa.load(file_path, sr=44100, mono=False)
+            if len(y.shape) == 1:  # If still mono, convert to stereo
+                y = np.stack([y, y])
         except Exception as e:
             return {"error": f"Failed to load audio file: {str(e)}"}
+        
+        # First attempt with Demucs
         vocals = self._extract_vocals(y, sr)
-        if len(vocals) == 0:
+        
+        # Check for vocal content using multiple methods
+        has_vocals = False
+        
+        # Method 1: Energy in vocal frequency range
+        if len(vocals) > 0:
+            spec = np.abs(librosa.stft(np.mean(vocals, axis=0) if len(vocals.shape) > 1 else vocals))
+            freqs = librosa.fft_frequencies(sr=sr)
+            
+            # Focus on typical vocal frequency range (80Hz - 1100Hz)
+            vocal_range_mask = (freqs >= 80) & (freqs <= 1100)
+            vocal_range_energy = np.sum(spec[vocal_range_mask])
+            total_energy = np.sum(spec)
+            
+            if vocal_range_energy / (total_energy + 1e-10) >= 0.15:  # Lowered threshold
+                has_vocals = True
+        
+        # Method 2: Check for periodic patterns typical of speech/singing
+        if not has_vocals and len(vocals) > 0:
+            # Use autocorrelation to detect periodicity
+            y_mono = np.mean(vocals, axis=0) if len(vocals.shape) > 1 else vocals
+            hop_length = 512
+            oenv = librosa.onset.onset_strength(y=y_mono, sr=sr, hop_length=hop_length)
+            tempogram = librosa.feature.tempogram(onset_envelope=oenv, sr=sr, hop_length=hop_length)
+            
+            # Check if there are clear periodic patterns
+            if np.max(tempogram) > 0.5:  # Lowered threshold
+                has_vocals = True
+        
+        # Method 3: Spectral rolloff and contrast
+        if not has_vocals and len(vocals) > 0:
+            y_mono = np.mean(vocals, axis=0) if len(vocals.shape) > 1 else vocals
+            
+            # Spectral rolloff should be high for vocals
+            rolloff = librosa.feature.spectral_rolloff(y=y_mono, sr=sr)
+            
+            # Spectral contrast should show clear peaks in vocal frequencies
+            contrast = librosa.feature.spectral_contrast(y=y_mono, sr=sr)
+            
+            if np.mean(rolloff) > sr/4 or np.max(contrast) > 20:  # Adjusted thresholds
+                has_vocals = True
+        
+        if not has_vocals:
             return {"error": "No vocal content detected"}
+        
+        # Extract features from the detected vocals
         features = self._extract_features(vocals, sr)
         self.features_cache[Path(file_path).name] = features
+        
+        # Add duration information
+        duration_sec = len(y[0]) / sr
+        minutes = int(duration_sec // 60)
+        seconds = int(duration_sec % 60)
+        features['duration'] = f"{minutes}:{seconds:02d}"
+        
+        # Estimate musical key
+        key = self._estimate_musical_key(vocals, sr)
+        features['key'] = key
+        
         return features
+
+    def _freq_to_bin(self, freq, sr):
+        """Convert frequency to FFT bin number."""
+        n_fft = 2048  # Default FFT size
+        return int(freq * n_fft / sr)
 
     def _extract_vocals(self, y, sr):
         """Extract vocal segments using the VocalSeparator."""
         from vocal_separator import VocalSeparator
         try:
-            separator = VocalSeparator(method='spleeter')
+            separator = VocalSeparator()
             vocals = separator.separate(y, sr)
             separator.cleanup()
+            
+            # Additional post-processing to clean up the vocals
+            if len(vocals) > 0:
+                # Apply a bandpass filter to focus on vocal frequencies
+                vocals = self._apply_bandpass_filter(vocals, sr)
             return vocals
         except Exception as e:
             print(f"Advanced vocal separation failed: {str(e)}. Falling back to basic separation.")
-        y_harmonic, _ = librosa.effects.hpss(y)
-        spec = np.abs(librosa.stft(y_harmonic))
-        spec_sum = np.sum(spec, axis=0)
-        threshold = np.mean(spec_sum) * 1.5
-        mask = spec_sum > threshold
-        segments = []
-        start = None
-        for i, m in enumerate(mask):
-            if m and start is None:
-                start = i
-            elif not m and start is not None:
-                end = i
-                if end - start > sr // 2:
-                    segments.append((start, end))
-                start = None
-        vocals = []
-        for start, end in segments:
-            start_time = librosa.frames_to_time(start, sr=sr)
-            end_time = librosa.frames_to_time(end, sr=sr)
-            segment = y[int(start_time * sr):int(end_time * sr)]
-            vocals.append(segment)
-        return np.concatenate(vocals) if vocals else np.array([])
+            
+        # Enhanced fallback method
+        try:
+            y_mono = np.mean(y, axis=0) if len(y.shape) > 1 else y
+            y_harmonic, _ = librosa.effects.hpss(y_mono)
+            
+            # Use spectral contrast to identify vocal regions
+            S = np.abs(librosa.stft(y_harmonic))
+            contrast = librosa.feature.spectral_contrast(S=S, sr=sr)
+            contrast_mean = np.mean(contrast, axis=1)
+            
+            # Create a mask for vocal frequencies
+            freqs = librosa.fft_frequencies(sr=sr)
+            vocal_mask = (freqs >= 200) & (freqs <= 3000)
+            
+            # Apply the mask
+            S_filtered = S * vocal_mask.reshape(-1, 1)
+            vocals = librosa.istft(S_filtered)
+            
+            # Apply bandpass filter
+            vocals = self._apply_bandpass_filter(vocals, sr)
+            
+            return vocals
+        except Exception as e:
+            print(f"Basic separation also failed: {str(e)}")
+            return np.array([])
+
+    def _apply_bandpass_filter(self, audio, sr):
+        """Apply bandpass filter to focus on vocal frequencies."""
+        # Design bandpass filter
+        nyquist = sr / 2
+        low = 200 / nyquist
+        high = 3000 / nyquist
+        b, a = signal.butter(5, [low, high], btype='band')
+        
+        # Apply filter
+        return signal.filtfilt(b, a, audio)
 
     def _extract_features(self, vocals, sr):
         """Extract core vocal features and compute additional metrics."""
-        pitches, confidence = librosa.piptrack(y=vocals, sr=sr)
-        pitch_values = pitches[pitches > 0]
-        pitch_mean = np.mean(pitch_values) if len(pitch_values) > 0 else 0
-        pitch_std = np.std(pitch_values) if len(pitch_values) > 0 else 0
-        pitch_vals, pitch_conf = self.pitch_processor(vocals)
-        valid_pitches = pitch_vals[pitch_conf > 0.8]
-        if len(valid_pitches) > 0:
-            min_pitch = np.min(valid_pitches[valid_pitches > 50])
-            max_pitch = np.max(valid_pitches[valid_pitches < 2000])
-            vocal_range_semitones = 12 * np.log2(max_pitch/min_pitch) if min_pitch > 0 else 0
-        else:
-            min_pitch = max_pitch = vocal_range_semitones = 0
+        # Convert to mono for feature extraction if needed
+        y_mono = np.mean(vocals, axis=0) if len(vocals.shape) > 1 else vocals
+        
+        # Extract pitch and confidence using more robust method
+        pitches, magnitudes = librosa.piptrack(y=y_mono, sr=sr, fmin=50, fmax=2000)
+        
+        # Use magnitude-weighted statistics for more accurate pitch estimation
+        pitch_mask = magnitudes > np.median(magnitudes) * 0.1
+        valid_pitches = pitches[pitch_mask]
+        valid_magnitudes = magnitudes[pitch_mask]
+        
+        if len(valid_pitches) == 0:
+            return {
+                "error": "Could not extract reliable pitch information"
+            }
+        
+        # Calculate weighted statistics
+        pitch_mean = np.average(valid_pitches, weights=valid_magnitudes)
+        pitch_std = np.sqrt(np.average((valid_pitches - pitch_mean)**2, weights=valid_magnitudes))
+        
+        # Get min/max pitches (weighted by magnitude)
+        min_pitch = np.min(valid_pitches[valid_magnitudes > np.max(valid_magnitudes) * 0.1])
+        max_pitch = np.max(valid_pitches[valid_magnitudes > np.max(valid_magnitudes) * 0.1])
+        
+        # Calculate vocal range in semitones
+        vocal_range_semitones = 12 * np.log2(max_pitch/min_pitch) if min_pitch > 0 else 0
+        
+        # Analyze vibrato
         vibrato_rate, vibrato_extent = self._analyze_vibrato(valid_pitches)
-        mfccs = librosa.feature.mfcc(y=vocals, sr=sr, n_mfcc=13)
+        
+        # Extract MFCCs for timbre analysis
+        mfccs = librosa.feature.mfcc(y=y_mono, sr=sr, n_mfcc=13)
         mfcc_means = np.mean(mfccs, axis=1)
         mfcc_stds = np.std(mfccs, axis=1)
-        spectral_centroid = np.mean(librosa.feature.spectral_centroid(y=vocals, sr=sr))
-        spectral_bandwidth = np.mean(librosa.feature.spectral_bandwidth(y=vocals, sr=sr))
-        spectral_contrast = np.mean(librosa.feature.spectral_contrast(y=vocals, sr=sr), axis=1)
-        rms = librosa.feature.rms(y=vocals)[0]
-        dynamic_range = np.percentile(rms, 95) - np.percentile(rms, 5)
-        breathiness = self._estimate_breathiness(vocals, sr)
-        onset_env = librosa.onset.onset_strength(y=vocals, sr=sr)
-        onset_density = len(librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr)) / (len(vocals)/sr)
-        pitch_accuracy = self._calculate_pitch_accuracy(valid_pitches, pitch_conf)
-        breath_control = self._calculate_breath_control(vocals, sr)
-        resonance_score = self._calculate_resonance(vocals, sr)
+        
+        # Calculate spectral features
+        spectral_centroid = float(np.mean(librosa.feature.spectral_centroid(y=y_mono, sr=sr)))
+        spectral_bandwidth = float(np.mean(librosa.feature.spectral_bandwidth(y=y_mono, sr=sr)))
+        spectral_contrast = np.mean(librosa.feature.spectral_contrast(y=y_mono, sr=sr), axis=1).tolist()
+        
+        # Calculate dynamic range
+        rms = librosa.feature.rms(y=y_mono)[0]
+        dynamic_range = float(np.percentile(rms, 95) - np.percentile(rms, 5))
+        
+        # Calculate breath control score
+        breath_control = self._calculate_breath_control(y_mono, sr)
+        
+        # Calculate pitch accuracy
+        pitch_accuracy = self._calculate_pitch_accuracy(valid_pitches, valid_magnitudes)
+        
+        # Calculate resonance score
+        resonance_score = self._calculate_resonance(y_mono, sr)
+        
+        # Calculate articulation score
+        onset_env = librosa.onset.onset_strength(y=y_mono, sr=sr)
+        onset_density = float(len(librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr)) / (len(y_mono)/sr))
         articulation_score = self._rate_articulation(onset_density, mfcc_stds)
+        
+        # Calculate emotional expressivity
         emotional_expressivity = self._calculate_expressivity(mfcc_means, mfcc_stds, dynamic_range)
-        register_transitions = self._detect_register_transitions(valid_pitches, pitch_conf, spectral_centroid)
+        
         return {
             "pitch_accuracy": float(pitch_accuracy),
             "min_pitch_hz": float(min_pitch),
@@ -111,11 +226,9 @@ class VocalAnalyzer:
             "dynamic_range": float(dynamic_range),
             "articulation_score": float(articulation_score),
             "emotional_expressivity": float(emotional_expressivity),
-            "pitch_confidence": float(np.mean(pitch_conf)) if len(pitch_conf) > 0 else 0,
             "spectral_centroid": float(spectral_centroid),
             "spectral_bandwidth": float(spectral_bandwidth),
-            "spectral_contrast": spectral_contrast.tolist(),
-            "register_transitions": register_transitions
+            "spectral_contrast": spectral_contrast
         }
 
     def _detect_register_transitions(self, pitches, confidence, spectral_centroid):
@@ -159,23 +272,9 @@ class VocalAnalyzer:
         return vibrato_rate, vibrato_extent
 
     def _estimate_breathiness(self, y, sr):
-        """Estimate breathiness using harmonic ratio (via Essentia)."""
-        harmonic = es.HarmonicRatio()
-        frame_size = 2048
-        hop_size = 1024
-        hnr_values = []
-        for i in range(0, len(y)-frame_size, hop_size):
-            frame = y[i:i+frame_size]
-            if np.std(frame) > 0.01:
-                try:
-                    hnr = harmonic(frame)
-                    hnr_values.append(hnr)
-                except Exception:
-                    continue
-        if not hnr_values:
-            return 0
-        mean_hnr = np.mean(hnr_values)
-        breathiness = 10 / (1 + mean_hnr)
+        """Estimate breathiness using spectral flatness instead of harmonic ratio."""
+        spectral_flatness = librosa.feature.spectral_flatness(y=y)[0]
+        breathiness = np.mean(spectral_flatness) * 10
         return min(10, breathiness)
 
     def _calculate_pitch_accuracy(self, pitches, confidence):
@@ -246,6 +345,54 @@ class VocalAnalyzer:
         timbre = np.mean(mfcc_stds)
         timbre_score = min(10, timbre*2.5)
         return (dyn_score*0.6 + timbre_score*0.4)
+
+    def _estimate_musical_key(self, vocals, sr):
+        """Estimate the musical key of the vocal performance."""
+        try:
+            # Convert to mono if necessary
+            y_mono = np.mean(vocals, axis=0) if len(vocals.shape) > 1 else vocals
+            
+            # Extract chroma features
+            chroma = librosa.feature.chroma_cqt(y=y_mono, sr=sr)
+            
+            # Average chroma over time
+            chroma_avg = np.mean(chroma, axis=1)
+            
+            # Define key names
+            keys = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+            modes = ['Major', 'Minor']
+            
+            # Simple template matching for major and minor keys
+            major_template = np.array([1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1])
+            minor_template = np.array([1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0])
+            
+            max_correlation = -1
+            best_key = 'C'
+            best_mode = 'Major'
+            
+            for i in range(12):  # For each possible key
+                # Rotate templates to match each key
+                major_rotated = np.roll(major_template, i)
+                minor_rotated = np.roll(minor_template, i)
+                
+                # Calculate correlation
+                major_corr = np.correlate(chroma_avg, major_rotated)
+                minor_corr = np.correlate(chroma_avg, minor_rotated)
+                
+                if major_corr > max_correlation:
+                    max_correlation = major_corr
+                    best_key = keys[i]
+                    best_mode = 'Major'
+                
+                if minor_corr > max_correlation:
+                    max_correlation = minor_corr
+                    best_key = keys[i]
+                    best_mode = 'Minor'
+            
+            return f"{best_key} {best_mode}"
+        except Exception as e:
+            print(f"Error estimating key: {str(e)}")
+            return "Unknown"
 
 # Usage example (command-line):
 if __name__ == "__main__":

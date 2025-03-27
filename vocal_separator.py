@@ -5,6 +5,7 @@ import numpy as np
 import librosa
 import soundfile as sf
 import torch
+import torchaudio
 from demucs.pretrained import get_model
 from demucs.apply import apply_model
 
@@ -12,49 +13,63 @@ class VocalSeparator:
     """
     Vocal separator using Demucs (state-of-the-art music source separation).
     """
-    def __init__(self, model_name='htdemucs', device=None):
-        self.model_name = model_name
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
-        self.temp_dir = tempfile.mkdtemp(prefix="vocal_sep_")
-        self._initialize_model()
-
-    def _initialize_model(self):
-        try:
-            self.model = get_model(self.model_name)
-            self.model.to(self.device)
-            print(f"Initialized Demucs model '{self.model_name}' on {self.device}")
-        except Exception as e:
-            raise RuntimeError(f"Failed to initialize Demucs model: {str(e)}")
+    def __init__(self):
+        """Initialize the vocal separator with Demucs."""
+        self.model = get_model('htdemucs')
+        self.model.cpu()
+        self.model.eval()
+        self.temp_dir = None
 
     def separate(self, audio, sr):
-        """Separate vocals using Demucs."""
+        """Separate vocals from the audio using Demucs.
+        
+        Args:
+            audio: Audio array (channels, samples) or (samples,)
+            sr: Sample rate
+            
+        Returns:
+            Separated vocals as numpy array
+        """
         try:
-            # Convert to mono if stereo
-            if len(audio.shape) > 1:
-                audio = librosa.to_mono(audio)
-
-            # Demucs expects input as: (batch, channels, time)
-            audio_tensor = torch.tensor(audio).float()
-            audio_tensor = audio_tensor.unsqueeze(0).unsqueeze(0)
-
+            # Create temporary directory for processing
+            self.temp_dir = tempfile.mkdtemp(prefix='vocal_sep_')
+            
+            # Ensure audio is in the correct format (channels, samples)
+            if len(audio.shape) == 1:
+                audio = np.stack([audio, audio])
+            elif audio.shape[0] > 2:
+                audio = audio[:2]  # Take first two channels if more than stereo
+            
+            # Convert to torch tensor
+            audio_tensor = torch.tensor(audio, dtype=torch.float32)
+            
+            # Add batch dimension
+            audio_tensor = audio_tensor.unsqueeze(0)
+            
             # Apply the model
             with torch.no_grad():
-                sources = apply_model(self.model, audio_tensor, device=self.device)[0]
-                # sources will be a tensor of shape (sources, channels, time)
-                vocals = sources[self.model.sources.index('vocals')].squeeze().cpu().numpy()
-
+                sources = apply_model(self.model, audio_tensor, device='cpu', progress=False)
+                
+            # Extract vocals (sources is a tensor of shape (1, sources, channels, samples))
+            vocals = sources[0, self.model.sources.index('vocals')].numpy()
+            
             return vocals
-
+            
         except Exception as e:
-            raise RuntimeError(f"Vocal separation failed: {str(e)}")
-
+            print(f"Error in vocal separation: {str(e)}")
+            return np.array([])
+        
     def cleanup(self):
-        try:
-            shutil.rmtree(self.temp_dir)
-        except Exception as e:
-            print(f"Warning: Could not remove temporary directory: {str(e)}")
+        """Clean up temporary files."""
+        if self.temp_dir and os.path.exists(self.temp_dir):
+            try:
+                shutil.rmtree(self.temp_dir)
+            except Exception as e:
+                print(f"Warning: Could not remove temporary directory: {str(e)}")
+        self.temp_dir = None
 
     def __del__(self):
+        """Ensure cleanup on object destruction."""
         self.cleanup()
 
 # Usage example:
@@ -67,7 +82,7 @@ if __name__ == "__main__":
     output_path = sys.argv[2]
     try:
         separator = VocalSeparator()
-        audio, sr = librosa.load(input_path, sr=None)
+        audio, sr = librosa.load(input_path, sr=None, mono=False)  # Load as stereo
         print(f"Separating vocals from {input_path}...")
         vocals = separator.separate(audio, sr)
         sf.write(output_path, vocals, sr)
