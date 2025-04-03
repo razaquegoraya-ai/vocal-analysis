@@ -167,118 +167,127 @@
             <div class="row">
                 <div class="col-md-6">
                     <p><strong>Date:</strong> {{ analysis.date }}</p>
-                    <p><strong>Performances Analyzed:</strong> {{ analysis.performances_analyzed }}</p>
+                    <p><strong>Performance:</strong> {{ analysis.file_number }}</p>
                 </div>
                 <div class="col-md-6">
-                    <p><strong>Overall Rating:</strong> <span data-score="{{ analysis.overall_rating }}">{{ "%.1f"|format(analysis.overall_rating) }}/10</span></p>
-                    <p><strong>Consistency Score:</strong> <span data-score="{{ analysis.progress.consistency_score }}">{{ "%.1f"|format(analysis.progress.consistency_score) }}/10</span></p>
+                    <p><strong>Overall Rating:</strong> {{ "%.1f"|format(analysis.overall_rating) }}/10</p>
+                    <p><strong>Consistency Score:</strong> {{ "%.1f"|format(analysis.consistency_score) }}/10</p>
                 </div>
             </div>
         </div>
 
-        <!-- Technical Assessment Section -->
+        <!-- Technical Assessment -->
         <div class="section">
             <h3 class="section-title">Technical Assessment</h3>
-            <div class="row">
-                {% for metric, data in analysis.technical_assessment.items() %}
-                <div class="col-md-6">
-                    <div class="metric-card">
-                        <h5>{{ metric|replace('_', ' ')|title }}</h5>
-                        <div class="progress">
-                            <div class="progress-bar"
-                                 role="progressbar"
-                                 data-score="{{ data.score if data.score is defined else 0 }}"
-                                 aria-valuenow="0"
-                                 aria-valuemin="0"
-                                 aria-valuemax="100">
-                                {{ "%.1f"|format(data.score) if data.score is defined else "0.0" }}/10
-                            </div>
-                        </div>
-                        <p><strong>Industry Average:</strong> <span>{{ "%.1f"|format(data.industry_avg) }}/10</span></p>
-                        {% if data.rate is defined %}
-                        <p><strong>Rate:</strong> <span class="{% if data.rate == 0 %}text-danger{% endif %}">{{ "%.1f"|format(data.rate) }}Hz</span></p>
-                        {% endif %}
-                        {% if data.notes %}
-                        <p class="notes">{{ data.notes }}</p>
-                        {% endif %}
+
+            <!-- Pitch Accuracy -->
+            <div class="metric-card">
+                <h4>Pitch Accuracy</h4>
+                <div class="progress">
+                    <div class="progress-bar" role="progressbar" data-score="{{ analysis.pitch_accuracy }}">
+                        {{ "%.1f"|format(analysis.pitch_accuracy) }}/10
                     </div>
                 </div>
-                {% endfor %}
+                <p><strong>Industry Average:</strong> {{ analysis.industry_averages.pitch_accuracy }}/10</p>
+                <p>Based on pitch stability and accuracy</p>
+            </div>
+
+            <!-- Breath Control -->
+            <div class="metric-card">
+                <h4>Breath Control</h4>
+                <div class="progress">
+                    <div class="progress-bar" role="progressbar" data-score="{{ analysis.breath_control }}">
+                        {{ "%.1f"|format(analysis.breath_control) }}/10
+                    </div>
+                </div>
+                <p><strong>Industry Average:</strong> {{ analysis.industry_averages.breath_control }}/10</p>
+                <p>Based on phrase length and stability</p>
+            </div>
+
+            <!-- Vibrato Quality -->
+            <div class="metric-card">
+                <h4>Vibrato Quality</h4>
+                <div class="progress">
+                    <div class="progress-bar" role="progressbar" data-score="{{ analysis.vibrato_quality }}">
+                        {{ "%.1f"|format(analysis.vibrato_quality) }}/10
+                    </div>
+                </div>
+                <p><strong>Industry Average:</strong> {{ analysis.industry_averages.vibrato_quality }}/10</p>
+                <p><strong>Rate:</strong> {{ "%.1f"|format(analysis.vibrato_rate) }}Hz</p>
+                <p>Based on rate and depth consistency</p>
+            </div>
+
+            <!-- Resonance -->
+            <div class="metric-card">
+                <h4>Resonance</h4>
+                <div class="progress">
+                    <div class="progress-bar" role="progressbar" data-score="{{ analysis.resonance }}">
+                        {{ "%.1f"|format(analysis.resonance) }}/10
+                    </div>
+                </div>
+                <p><strong>Industry Average:</strong> {{ analysis.industry_averages.resonance }}/10</p>
+                <p>Based on spectral balance and clarity</p>
+            </div>
+
+            <!-- Dynamic Range -->
+            <div class="metric-card">
+                <h4>Dynamic Range</h4>
+                <div class="progress">
+                    <div class="progress-bar" role="progressbar" data-score="{{ analysis.dynamic_range }}">
+                        {{ "%.1f"|format(analysis.dynamic_range) }}/10
+                    </div>
+                </div>
+                <p><strong>Industry Average:</strong> {{ analysis.industry_averages.dynamic_range }}/10</p>
+                <p>Based on volume control and expression</p>
             </div>
         </div>
 
-        <!-- Vocal Range Section -->
+        <!-- Vocal Range Analysis -->
         <div class="section">
             <h3 class="section-title">Vocal Range Analysis</h3>
-            <div class="row">
-                <div class="col-md-12">
-                    <div class="metric-card">
-                        <div class="row">
-                            <div class="col-md-6">
-                                <h5>Range Details</h5>
-                                <p><strong>Lowest Note:</strong> <span class="unknown-value">{{ analysis.vocal_range.lowest_note }}</span></p>
-                                <p><strong>Highest Note:</strong> <span class="unknown-value">{{ analysis.vocal_range.highest_note }}</span></p>
-                                <p><strong>Range Span:</strong> <span>{{ analysis.vocal_range.range_span }}</span></p>
-                            </div>
-                            <div class="col-md-6">
-                                <h5>Register Transitions</h5>
-                                <div class="register-transitions">
-                                    <p><strong>Chest to Mix:</strong> <span class="value-info">{{ analysis.register_transitions.chest_to_mix_note }}</span></p>
-                                    <p><strong>Mix to Head:</strong> <span class="value-info">{{ analysis.register_transitions.mix_to_head_note }}</span></p>
-                                    <p><strong>Head to Whistle:</strong> <span class="value-info">{{ analysis.register_transitions.head_to_whistle_note }}</span></p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+
+            <div class="subsection">
+                <h4>Range Details</h4>
+                <p><strong>Lowest Note:</strong> {{ analysis.lowest_note }}</p>
+                <p><strong>Highest Note:</strong> {{ analysis.highest_note }}</p>
+                <p><strong>Range Span:</strong> {{ analysis.range_span }}</p>
+            </div>
+
+            <div class="subsection">
+                <h4>Register Transitions</h4>
+                <p><strong>Chest to Mix:</strong> {{ analysis.chest_to_mix }}</p>
+                <p><strong>Mix to Head:</strong> {{ analysis.mix_to_head }}</p>
+                <p><strong>Head to Whistle:</strong> {{ analysis.head_to_whistle }}</p>
             </div>
         </div>
 
-        <!-- Progress and Recommendations Section -->
+        <!-- Recommendations -->
         <div class="section">
-            <h3 class="section-title">Progress and Recommendations</h3>
-            <div class="row">
-                <div class="col-md-6">
-                    <h4>Areas for Improvement</h4>
-                    <ul class="list-group">
-                        {% for area in analysis.progress.improvement_areas %}
-                        <li class="list-group-item">
-                            <h5>{{ area.area }}</h5>
-                            <div class="progress">
-                                <div class="progress-bar bg-warning"
-                                     role="progressbar"
-                                     data-score="{{ area.score }}"
-                                     aria-valuenow="0"
-                                     aria-valuemin="0"
-                                     aria-valuemax="100">
-                                    {{ "%.1f"|format(area.score) }}/10
-                                </div>
-                            </div>
-                            <small class="text-muted">Target: {{ area.target }}/10</small>
-                        </li>
-                        {% endfor %}
-                    </ul>
-                </div>
-                <div class="col-md-6">
-                    <h4>Strengths</h4>
-                    <ul class="list-group">
-                        {% for strength in analysis.progress.strengths %}
-                        <li class="list-group-item">
-                            <h5>{{ strength.area }}</h5>
-                            <div class="progress">
-                                <div class="progress-bar bg-success"
-                                     role="progressbar"
-                                     data-score="{{ strength.score }}"
-                                     aria-valuenow="0"
-                                     aria-valuemin="0"
-                                     aria-valuemax="100">
-                                    {{ "%.1f"|format(strength.score) }}/10
-                                </div>
-                            </div>
-                        </li>
-                        {% endfor %}
-                    </ul>
-                </div>
+            <h3 class="section-title">Recommendations</h3>
+
+            <div class="subsection">
+                <h4>Areas for Improvement</h4>
+                {% for metric in ['pitch_accuracy', 'breath_control', 'vibrato_quality', 'resonance', 'dynamic_range'] %}
+                    {% if analysis[metric] < 7.5 %}
+                    <div class="recommendation">
+                        <h5>{{ metric|replace('_', ' ')|title }}</h5>
+                        <p>Current: {{ "%.1f"|format(analysis[metric]) }}/10</p>
+                        <p>Target: 8.0/10</p>
+                    </div>
+                    {% endif %}
+                {% endfor %}
+            </div>
+
+            <div class="subsection">
+                <h4>Strengths</h4>
+                {% for metric in ['pitch_accuracy', 'breath_control', 'vibrato_quality', 'resonance', 'dynamic_range'] %}
+                    {% if analysis[metric] >= 8.0 %}
+                    <div class="recommendation">
+                        <h5>{{ metric|replace('_', ' ')|title }}</h5>
+                        <p>Score: {{ "%.1f"|format(analysis[metric]) }}/10</p>
+                    </div>
+                    {% endif %}
+                {% endfor %}
             </div>
         </div>
     </div>
@@ -286,60 +295,14 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // Validate and normalize scores
-            function normalizeScore(score) {
-                if (typeof score !== 'number' || isNaN(score)) return 0;
-                return Math.min(Math.max(score, 0), 10); // Clamp between 0 and 10
-            }
+            // Add color classes and set widths for progress bars
+            document.querySelectorAll('.progress-bar').forEach(function(bar) {
+                const score = parseFloat(bar.dataset.score);
+                bar.style.width = (score * 10) + '%';
 
-            // Format display value
-            function formatDisplayValue(score, showDecimal = true) {
-                const normalizedScore = normalizeScore(score);
-                return showDecimal ? normalizedScore.toFixed(1) : Math.round(normalizedScore);
-            }
-
-            // Get score color class
-            function getScoreColorClass(score) {
-                const normalizedScore = normalizeScore(score);
-                if (normalizedScore >= 8) return 'bg-success';
-                if (normalizedScore >= 6) return 'bg-warning';
-                return 'bg-danger';
-            }
-
-            // Update all score displays
-            document.querySelectorAll('[data-score]').forEach(function(element) {
-                const rawScore = parseFloat(element.dataset.score || 0);
-                const normalizedScore = normalizeScore(rawScore);
-
-                if (element.classList.contains('progress-bar')) {
-                    // Update progress bar
-                    element.style.width = (normalizedScore * 10) + '%';
-                    element.setAttribute('aria-valuenow', Math.round(normalizedScore * 10));
-                    element.textContent = formatDisplayValue(normalizedScore) + '/10';
-
-                    // Set color class
-                    ['bg-success', 'bg-warning', 'bg-danger'].forEach(cls => element.classList.remove(cls));
-                    element.classList.add(getScoreColorClass(normalizedScore));
-                } else {
-                    // Update other score displays
-                    element.textContent = formatDisplayValue(normalizedScore) + '/10';
-                    element.classList.add(normalizedScore < 6 ? 'value-warning' : 'value-success');
-                }
-            });
-
-            // Handle unknown values
-            document.querySelectorAll('.unknown-value').forEach(function(element) {
-                if (!element.textContent || element.textContent.trim() === '' ||
-                    element.textContent.toLowerCase().includes('unknown') ||
-                    element.textContent.toLowerCase().includes('not available')) {
-                    element.textContent = 'Not Available';
-                    element.classList.add('text-muted');
-                }
-            });
-
-            // Add warning class to zero rates
-            document.querySelectorAll('[data-rate="0"]').forEach(function(element) {
-                element.classList.add('text-danger');
+                if (score >= 8) bar.classList.add('bg-success');
+                else if (score >= 6) bar.classList.add('bg-warning');
+                else bar.classList.add('bg-danger');
             });
         });
     </script>

@@ -1,18 +1,12 @@
 from datetime import datetime
 import numpy as np
-from flask import Flask, render_template, redirect, url_for
-from vocal_analyzer import VocalAnalyzer
-from report_generator import ReportGenerator
 import math
-
-app = Flask(__name__)
 
 def calculate_trends(analyses):
     """Calculate trends across multiple analyses."""
     trends = {}
     metrics = ['pitch_accuracy', 'breath_control', 'vibrato_quality', 
-               'resonance_score', 'dynamic_range', 'articulation_score', 
-               'emotional_expressivity']
+               'resonance', 'dynamic_range']
     
     for metric in metrics:
         values = [analysis.get(metric, 0) for analysis in analyses]
@@ -97,7 +91,7 @@ def generate_overall_recommendations(analyses):
         )
     
     # Analyze resonance trends
-    resonance_scores = [analysis.get('resonance_score', 0) for analysis in analyses]
+    resonance_scores = [analysis.get('resonance', 0) for analysis in analyses]
     if len(resonance_scores) > 1 and resonance_scores[-1] < 8.0:
         recommendations['technique'].append(
             'Focus on resonance exercises to improve tone quality and projection.'
@@ -105,7 +99,7 @@ def generate_overall_recommendations(analyses):
     
     return recommendations
 
-def generate_report_context(analysis_results, artist_name):
+def generate_report_context(analysis_results, artist_name, file_number=None):
     """Generate a context dictionary for the report template."""
     if not analysis_results:
         return None
@@ -116,13 +110,59 @@ def generate_report_context(analysis_results, artist_name):
             return 0.0
         return min(max(float(score), 0.0), 10.0)
 
-    # Calculate overall metrics
-    pitch_accuracy = normalize_score(analysis_results.get('pitch_accuracy', 0))
-    breath_control = normalize_score(analysis_results.get('breath_control', 0))
-    vibrato_rate = float(analysis_results.get('vibrato_rate', 0))
-    resonance = normalize_score(analysis_results.get('resonance', 0))
-    dynamic_range = normalize_score(analysis_results.get('dynamic_range', 0))
-    articulation = normalize_score(analysis_results.get('articulation', 0))
+    # Map the metrics from VocalAnalyzer to report metrics
+    metrics_mapping = {
+        'pitch_accuracy': 'pitch_accuracy',
+        'breath_control': 'breath_control',
+        'resonance': 'resonance',
+        'dynamic_range': 'dynamic_range',
+        'vibrato_rate': 'vibrato_rate',
+        'vibrato_extent': 'vibrato_extent'
+    }
+
+    # Initialize context with default values
+    context = {
+        'artist_name': artist_name,
+        'date': datetime.now().strftime('%B %d, %Y'),
+        'file_number': file_number,
+        'overall_rating': 0.0,
+        'consistency_score': 0.0,
+        'pitch_accuracy': 0.0,
+        'breath_control': 0.0,
+        'vibrato_rate': 0.0,
+        'vibrato_extent': 0.0,
+        'resonance': 0.0,
+        'dynamic_range': 0.0,
+        'lowest_note': 'Not Available',
+        'highest_note': 'Not Available',
+        'range_span': '0 octaves',
+        'chest_to_mix': 'D4',
+        'mix_to_head': 'E5',
+        'head_to_whistle': 'C6'
+    }
+
+    # Update context with actual values from analysis_results
+    for output_key, input_key in metrics_mapping.items():
+        if input_key in analysis_results:
+            value = analysis_results[input_key]
+            if isinstance(value, (int, float)):
+                context[output_key] = normalize_score(value)
+            else:
+                context[output_key] = value
+
+    # Copy non-numeric values
+    if 'lowest_note' in analysis_results:
+        context['lowest_note'] = analysis_results['lowest_note']
+    if 'highest_note' in analysis_results:
+        context['highest_note'] = analysis_results['highest_note']
+    if 'range_span' in analysis_results:
+        context['range_span'] = analysis_results['range_span']
+    if 'chest_to_mix' in analysis_results:
+        context['chest_to_mix'] = analysis_results['chest_to_mix']
+    if 'mix_to_head' in analysis_results:
+        context['mix_to_head'] = analysis_results['mix_to_head']
+    if 'head_to_whistle' in analysis_results:
+        context['head_to_whistle'] = analysis_results['head_to_whistle']
 
     # Calculate overall rating based on weighted average
     weights = {
@@ -130,16 +170,31 @@ def generate_report_context(analysis_results, artist_name):
         'breath_control': 0.2,
         'resonance': 0.2,
         'dynamic_range': 0.15,
-        'articulation': 0.15
+        'vibrato_quality': 0.15
     }
-    
-    overall_rating = sum([
-        normalize_score(analysis_results.get(metric, 0)) * weight 
-        for metric, weight in weights.items()
-    ])
 
-    # Industry averages (these could be stored in a configuration file)
-    industry_averages = {
+    overall_rating = 0.0
+    total_weight = 0.0
+    for metric, weight in weights.items():
+        if metric in context and isinstance(context[metric], (int, float)):
+            overall_rating += context[metric] * weight
+            total_weight += weight
+
+    if total_weight > 0:
+        context['overall_rating'] = overall_rating / total_weight
+
+    # Calculate consistency score based on standard deviation of metrics
+    metrics_for_consistency = ['pitch_accuracy', 'breath_control', 'resonance', 'dynamic_range']
+    values = [context[metric] for metric in metrics_for_consistency if metric in context]
+    if values:
+        mean = sum(values) / len(values)
+        variance = sum((x - mean) ** 2 for x in values) / len(values)
+        std_dev = variance ** 0.5
+        # Convert to consistency score (inverse of standard deviation)
+        context['consistency_score'] = max(0, 10 - std_dev)
+
+    # Industry averages
+    context['industry_averages'] = {
         'pitch_accuracy': 7.8,
         'breath_control': 7.4,
         'vibrato_quality': 7.6,
@@ -147,91 +202,14 @@ def generate_report_context(analysis_results, artist_name):
         'dynamic_range': 7.0
     }
 
-    # Prepare technical assessment data
-    technical_assessment = {
-        'pitch_accuracy': {
-            'score': pitch_accuracy,
-            'industry_avg': industry_averages['pitch_accuracy'],
-            'notes': 'Based on pitch stability and accuracy'
-        },
-        'breath_control': {
-            'score': breath_control,
-            'industry_avg': industry_averages['breath_control'],
-            'notes': 'Based on phrase length and stability'
-        },
-        'vibrato_quality': {
-            'score': normalize_score(analysis_results.get('vibrato_quality', 0)),
-            'industry_avg': industry_averages['vibrato_quality'],
-            'rate': vibrato_rate,
-            'notes': 'Based on rate and depth consistency'
-        },
-        'resonance': {
-            'score': resonance,
-            'industry_avg': industry_averages['resonance'],
-            'notes': 'Based on spectral balance and clarity'
-        },
-        'dynamic_range': {
-            'score': dynamic_range,
-            'industry_avg': industry_averages['dynamic_range'],
-            'notes': 'Based on volume control and expression'
-        }
-    }
-
-    # Determine areas for improvement (metrics below 7.5)
-    improvement_areas = []
-    for metric, data in technical_assessment.items():
-        if data['score'] < 7.5:
-            improvement_areas.append({
-                'area': metric.replace('_', ' ').title(),
-                'score': data['score'],
-                'target': 8.0 if data['score'] < 6 else 7.5
-            })
-
-    # Determine strengths (metrics above 8.0)
-    strengths = []
-    for metric, data in technical_assessment.items():
-        if data['score'] >= 8.0:
-            strengths.append({
-                'area': metric.replace('_', ' ').title(),
-                'score': data['score']
-            })
-
-    # Add articulation if it's high enough
-    if articulation >= 8.0:
-        strengths.append({
-            'area': 'Articulation',
-            'score': articulation
-        })
-
-    # Prepare vocal range data
-    vocal_range = {
-        'lowest_note': analysis_results.get('lowest_note', 'Not Available'),
-        'highest_note': analysis_results.get('highest_note', 'Not Available'),
-        'range_span': analysis_results.get('range_span', '0 octaves')
-    }
-
-    # Prepare register transitions
-    register_transitions = {
-        'chest_to_mix_note': analysis_results.get('chest_to_mix', 'D4'),
-        'mix_to_head_note': analysis_results.get('mix_to_head', 'E5'),
-        'head_to_whistle_note': analysis_results.get('head_to_whistle', 'C6')
-    }
-
-    # Build the final context
-    context = {
-        'artist_name': artist_name,
-        'date': datetime.now().strftime('%B %d, %Y'),
-        'performances_analyzed': 1,  # This could be dynamic based on input
-        'overall_rating': overall_rating,
-        'technical_assessment': technical_assessment,
-        'vocal_range': vocal_range,
-        'register_transitions': register_transitions,
-        'progress': {
-            'consistency_score': normalize_score(analysis_results.get('consistency', 0)),
-            'improvement_areas': improvement_areas,
-            'strengths': strengths
-        }
-    }
+    # Calculate vibrato quality score
+    if 'vibrato_rate' in context and 'vibrato_extent' in context:
+        vibrato_quality = 0.0
+        if 4.5 <= context['vibrato_rate'] <= 6.5:  # Ideal vibrato rate range
+            rate_score = 10.0 - abs(5.5 - context['vibrato_rate'])
+            extent_score = min(10.0, context['vibrato_extent'] * 2)
+            vibrato_quality = (rate_score + extent_score) / 2
+        context['vibrato_quality'] = vibrato_quality
 
     return context
 
@@ -245,28 +223,11 @@ def generate_sample_analysis():
         'pitch_accuracy': 9.2,
         'breath_control': 8.5,
         'vibrato_quality': 8.9,
-        'resonance_score': 9.1,
+        'resonance': 9.1,
         'dynamic_range': 8.8,
-        'articulation_score': 8.5,
-        'emotional_expressivity': 9.4,
         'vocal_range': 'E3 - G6',
         'range_position': 65,
         'lowest_note': 'E3',
         'highest_note': 'G6',
         'range_span': '3.2 octaves'
     }
-
-@app.route('/')
-def index():
-    """Redirect root URL to test report."""
-    return redirect(url_for('test_report'))
-
-@app.route('/test_report')
-def test_report():
-    """Generate a test report with sample data."""
-    analysis = generate_sample_analysis()
-    context = generate_report_context(analysis, "Test Artist")
-    return render_template('report_template.html', analysis=context)
-
-if __name__ == '__main__':
-    app.run(debug=True)

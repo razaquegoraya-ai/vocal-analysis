@@ -1,0 +1,14 @@
+[Unit]
+Description=Vocal Analysis Flask Application
+After=network.target
+
+[Service]
+User=developer1
+Group=developer1
+WorkingDirectory=/home/developer1/vocal-analysis
+Environment="PATH=/home/developer1/vocal-analysis/venv/bin"
+ExecStart=/home/developer1/vocal-analysis/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:5000 --timeout 300 app:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target 
