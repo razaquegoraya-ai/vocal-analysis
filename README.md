@@ -1,6 +1,6 @@
 # Vocal Analysis Project
 
-<img width="1440" alt="image" src="https://github.com/user-attachments/assets/5bdfe9b6-2d62-4e86-8bba-e358ee8d2ad5" />
+<img width="1440" alt="image" src="https://github.com/user-attachments/assets/49e7f1e7-a6ba-43a1-8b14-264be3a14ba0" />
 
 
 A web application for analyzing vocal performances using advanced audio processing techniques.
